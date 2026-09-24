@@ -1,4 +1,4 @@
-/* AEGIS AUTO — backend (Vercel serverless, single function)
+﻿/* AEGIS AUTO — backend (Vercel serverless, single function)
    ระบบ: ลูกค้าโอน 15,900 ฿ → AI อ่านสลิปตรวจอัตโนมัติ → ออกโทเคน → ตั้งเป้าทุน/กำไร/วัน
    → EA ตัวเชื่อมบน MT5 ดึงแผน + ถาม "สมอง" (ข่าว/แนวโน้ม) แล้วเทรดตามแผนตลอด 24 ชม. */
 import { createClient } from "@supabase/supabase-js";
@@ -6,7 +6,15 @@ import { waitUntil } from "@vercel/functions";
 
 export const config = { maxDuration: 60 };
 
-const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
+/* สร้าง client แบบขี้เกียจ — ถ้ายังไม่ตั้ง ENV ฟังก์ชันต้องไม่ล่มทั้งก้อน (ping/payinfo ต้องยังตอบได้) */
+let _sb = null;
+function db() {
+  if (!_sb) {
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) throw new Error("ENV_MISSING");
+    _sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
+  }
+  return _sb;
+}
 
 const PRICE = Number(process.env.AUTO_PRICE || 15900);
 const BANK = { name: "กสิกรไทย (KBank)", acc: "083-3-21158-7", accPlain: "0833211587", holder: "ธนาวิล ไกกาจ" };
@@ -20,11 +28,11 @@ const normPhone = (p) => String(p || "").replace(/[^0-9]/g, "");
 
 /* key/value บนตาราง cache ของ Supabase (คีย์ขึ้นต้น at2: แยกจากระบบอื่นเด็ดขาด) */
 async function kget(key) {
-  const { data } = await sb.from("cache").select("value").eq("key", "at2:" + key).maybeSingle();
+  const { data } = await db().from("cache").select("value").eq("key", "at2:" + key).maybeSingle();
   return data ? data.value : null;
 }
 async function kset(key, value) {
-  await sb.from("cache").upsert({ key: "at2:" + key, value, updated_at: new Date().toISOString() });
+  await db().from("cache").upsert({ key: "at2:" + key, value, updated_at: new Date().toISOString() });
   return value;
 }
 
@@ -33,7 +41,7 @@ const MEM = new Map();
 async function cached(key, ttlMin, producer) {
   const m = MEM.get(key);
   if (m && Date.now() - m.at < 60000) return m.v;
-  const row = await sb.from("cache").select("value, updated_at").eq("key", "at2:" + key).maybeSingle();
+  const row = await db().from("cache").select("value, updated_at").eq("key", "at2:" + key).maybeSingle();
   const d = row.data;
   if (d && d.value && Date.now() - new Date(d.updated_at).getTime() < ttlMin * 60000) {
     MEM.set(key, { v: d.value, at: Date.now() });
@@ -141,7 +149,11 @@ async function accountByToken(token) {
 
 /* ---------- routes ---------- */
 const routes = {
-  "GET /api/ping": async (req, res) => json(res, 200, { ok: 1, price: PRICE }),
+  "GET /api/ping": async (req, res) => json(res, 200, { ok: 1, price: PRICE, env: {
+    supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY),
+    anthropic: !!process.env.ANTHROPIC_API_KEY,
+    adminKey: !!process.env.ADMIN_KEY,
+  } }),
 
   /* ข้อมูลบัญชีรับโอน (หน้าเว็บดึงไปแสดง) */
   "GET /api/payinfo": async (req, res) => json(res, 200, { price: PRICE, bank: BANK }),
