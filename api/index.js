@@ -26,13 +26,16 @@ const err = (res, code, msg, extra) => json(res, code, { error: msg, ...(extra |
 const rndToken = () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const normPhone = (p) => String(p || "").replace(/[^0-9]/g, "");
 
-/* key/value บนตาราง cache ของ Supabase (คีย์ขึ้นต้น at2: แยกจากระบบอื่นเด็ดขาด) */
+/* key/value บนตาราง cache ของ Supabase (คีย์ขึ้นต้น at2: แยกจากระบบอื่นเด็ดขาด)
+   สำคัญ: supabase-js ไม่ throw — ต้องเช็ค error เองไม่งั้นพังเงียบ */
 async function kget(key) {
-  const { data } = await db().from("cache").select("value").eq("key", "at2:" + key).maybeSingle();
+  const { data, error } = await db().from("cache").select("value").eq("key", "at2:" + key).maybeSingle();
+  if (error) { console.error("KGET_ERR", key, error.message); throw new Error("db_read: " + error.message); }
   return data ? data.value : null;
 }
 async function kset(key, value) {
-  await db().from("cache").upsert({ key: "at2:" + key, value, updated_at: new Date().toISOString() });
+  const { error } = await db().from("cache").upsert({ key: "at2:" + key, value, updated_at: new Date().toISOString() });
+  if (error) { console.error("KSET_ERR", key, error.message); throw new Error("db_write: " + error.message); }
   return value;
 }
 
@@ -149,11 +152,21 @@ async function accountByToken(token) {
 
 /* ---------- routes ---------- */
 const routes = {
-  "GET /api/ping": async (req, res) => json(res, 200, { ok: 1, price: PRICE, env: {
-    supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY),
-    anthropic: !!process.env.ANTHROPIC_API_KEY,
-    adminKey: !!process.env.ADMIN_KEY,
-  } }),
+  "GET /api/ping": async (req, res) => {
+    const out = { ok: 1, price: PRICE, env: {
+      supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY),
+      anthropic: !!process.env.ANTHROPIC_API_KEY,
+      adminKey: !!process.env.ADMIN_KEY,
+    } };
+    /* ทดสอบเขียน-อ่านฐานข้อมูลจริง 1 รอบ (ไม่แตะข้อมูลใคร ใช้คีย์ selftest ของตัวเอง) */
+    try {
+      const stamp = Date.now();
+      await kset("selftest", { stamp });
+      const back = await kget("selftest");
+      out.db = back && back.stamp === stamp ? "ok" : "mismatch";
+    } catch (e) { out.db = "error: " + String(e.message).slice(0, 140); }
+    return json(res, 200, out);
+  },
 
   /* ข้อมูลบัญชีรับโอน (หน้าเว็บดึงไปแสดง) */
   "GET /api/payinfo": async (req, res) => json(res, 200, { price: PRICE, bank: BANK }),
