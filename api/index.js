@@ -165,6 +165,11 @@ const routes = {
       const back = await kget("selftest");
       out.db = back && back.stamp === stamp ? "ok" : "mismatch";
     } catch (e) { out.db = "error: " + String(e.message).slice(0, 140); }
+    /* ?deep=1 = ทดสอบเรียก Claude จริง 1 ครั้งสั้นๆ (ใช้เช็คคีย์ ไม่ควรเรียกบ่อย) */
+    if (new URL(req.url || "/", "http://x").searchParams.get("deep") === "1") {
+      try { const t = await claude({ max_tokens: 12, messages: [{ role: "user", content: "reply exactly: ok" }] }); out.claude = "ok: " + String(t).slice(0, 20); }
+      catch (e) { out.claude = "error: " + String(e.message).slice(0, 160); }
+    }
     return json(res, 200, out);
   },
 
